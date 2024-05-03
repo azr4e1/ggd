@@ -210,7 +210,10 @@ func Main() int {
 	outputName := flag.String("output", "", "output file")
 	flag.Parse()
 
-	maxLength := *columns*2 + *columns / *groups
+	maxLength := *columns*2 + *columns / *groups - 1
+	if *columns%*groups != 0 {
+		maxLength++
+	}
 	formatter := PaddedFormat(maxLength, 9, *color)
 
 	var output io.Writer = os.Stdout
@@ -225,7 +228,12 @@ func Main() int {
 		output = outputFile
 	}
 
-	dumper, err := NewCmdDumper(WithColumns(*columns), WithGroups(*groups), WithInputFromArgs(flag.Args()), WithOutput(output), WithFormat(formatter))
+	dumper, err := NewCmdDumper(WithColumns(*columns),
+		WithGroups(*groups),
+		WithInputFromArgs(flag.Args()),
+		WithOutput(output),
+		WithFormat(formatter))
+
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return ErrorFlag
