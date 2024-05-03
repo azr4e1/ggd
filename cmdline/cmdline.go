@@ -35,7 +35,6 @@ type cmdDumper struct {
 	Output    io.Writer
 	Columns   int
 	Groups    int
-	Color     bool
 	Formatter Formatter
 	files     []io.Reader
 }
@@ -74,7 +73,7 @@ func ZeroPadding(num int, maxLength int) string {
 	return padding + sNum
 }
 
-func PaddedFormat(maxLengthHex, maxLengthOffset int) Formatter {
+func PaddedFormat(maxLengthHex, maxLengthOffset int, color bool) Formatter {
 	return func(hx ggd.HexDump) string {
 		normalizedInput := []byte{}
 		for _, b := range hx.Input {
@@ -87,7 +86,13 @@ func PaddedFormat(maxLengthHex, maxLengthOffset int) Formatter {
 
 		hexCodes := SpacePadding(strings.Join(hx.Output, " "), maxLengthHex)
 		offset := ZeroPadding(hx.Offset, maxLengthOffset)
-		return fmt.Sprintf("%s:    | %s |    %s", offset, hexCodes, normalizedInput)
+		normalizedInputStr := string(normalizedInput)
+		if color {
+			hexCodes = hexCodesStyle.Render(hexCodes)
+			offset = offsetStyle.Render(offset)
+			normalizedInputStr = inputStyle.Render(normalizedInputStr)
+		}
+		return fmt.Sprintf("%s:    | %s |    %s", offset, hexCodes, normalizedInputStr)
 	}
 }
 
@@ -97,7 +102,6 @@ func NewCmdDumper(opts ...option) (*cmdDumper, error) {
 		Output:    os.Stdout,
 		Columns:   16,
 		Groups:    2,
-		Color:     true,
 		Formatter: DefaultFormat,
 	}
 
@@ -161,13 +165,6 @@ func WithFormat(f Formatter) option {
 	}
 }
 
-func WithColor(c bool) option {
-	return func(cd *cmdDumper) error {
-		cd.Color = c
-		return nil
-	}
-}
-
 func WithInputFromArgs(args []string) option {
 	return func(cd *cmdDumper) error {
 		if len(args) < 1 {
@@ -214,7 +211,7 @@ func Main() int {
 	flag.Parse()
 
 	maxLength := ((*columns / *groups)*(1+*groups*2) + *columns%*groups) - 1
-	formatter := PaddedFormat(maxLength, 9)
+	formatter := PaddedFormat(maxLength, 9, *color)
 
 	var output io.Writer = os.Stdout
 	if *outputName != "" {
@@ -228,7 +225,7 @@ func Main() int {
 		output = outputFile
 	}
 
-	dumper, err := NewCmdDumper(WithColor(*color), WithColumns(*columns), WithGroups(*groups), WithInputFromArgs(flag.Args()), WithOutput(output), WithFormat(formatter))
+	dumper, err := NewCmdDumper(WithColumns(*columns), WithGroups(*groups), WithInputFromArgs(flag.Args()), WithOutput(output), WithFormat(formatter))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return ErrorFlag
