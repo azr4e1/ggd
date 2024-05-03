@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strconv"
 	"strings"
 	"unicode"
 
@@ -21,6 +22,9 @@ const (
 const (
 	PrintableMinASCII = 32
 	PrintableMaxASCII = unicode.MaxASCII
+	DefaultColumns    = 16
+	DefaultGroups     = 2
+	DefaultColor      = true
 )
 
 type option func(*cmdDumper) error
@@ -36,21 +40,55 @@ type cmdDumper struct {
 	files     []io.Reader
 }
 
-func IsAscii(b byte) bool {
+func IsPrintableAscii(b byte) bool {
 	return b < PrintableMaxASCII && b >= PrintableMinASCII
+}
+
+func SpacePadding(str string, maxLength int) string {
+	if len(str) >= maxLength {
+		return str
+	}
+	padding := strings.Repeat(" ", maxLength-len(str))
+	return str + padding
 }
 
 func DefaultFormat(hx ggd.HexDump) string {
 	normalizedInput := []byte{}
 	for _, b := range hx.Input {
-		if !IsAscii(b) || b == '\n' || b == '\t' {
+		if !IsPrintableAscii(b) || b == '\n' || b == '\t' {
 			normalizedInput = append(normalizedInput, '.')
 			continue
 		}
 		normalizedInput = append(normalizedInput, b)
 	}
 
-	return fmt.Sprintf("%d:\t%s\t%s", hx.Offset, strings.Join(hx.Output, " "), normalizedInput)
+	return fmt.Sprintf("%d:    %s    %s", hx.Offset, strings.Join(hx.Output, " "), normalizedInput)
+}
+
+func ZeroPadding(num int, maxLength int) string {
+	sNum := strconv.Itoa(num)
+	if len(sNum) >= maxLength {
+		return sNum
+	}
+	padding := strings.Repeat("0", maxLength-len(sNum))
+	return padding + sNum
+}
+
+func PaddedFormat(maxLengthHex, maxLengthOffset int) Formatter {
+	return func(hx ggd.HexDump) string {
+		normalizedInput := []byte{}
+		for _, b := range hx.Input {
+			if !IsPrintableAscii(b) {
+				normalizedInput = append(normalizedInput, '.')
+				continue
+			}
+			normalizedInput = append(normalizedInput, b)
+		}
+
+		hexCodes := SpacePadding(strings.Join(hx.Output, " "), maxLengthHex)
+		offset := ZeroPadding(hx.Offset, maxLengthOffset)
+		return fmt.Sprintf("%s:    | %s |    %s", offset, hexCodes, normalizedInput)
+	}
 }
 
 func NewCmdDumper(opts ...option) (*cmdDumper, error) {
@@ -148,16 +186,7 @@ func WithInputFromArgs(args []string) option {
 	}
 }
 
-// func SplitFunc(data []byte, atEOF bool) (advance int, token []byte, err error)
-
 func (cd *cmdDumper) Dump() error {
-	// input := bufio.NewScanner(cd.Input)
-	// // type SplitFunc func(data []byte, atEOF bool) (advance int, token []byte, err error)
-	// input.Split(SplitFunc)
-	//
-	// for input.Scan() {
-	// 	data := input.Bytes()
-	// }
 	for _, f := range cd.files {
 		defer f.(io.Closer).Close()
 	}
@@ -178,11 +207,14 @@ func (cd *cmdDumper) Dump() error {
 }
 
 func Main() int {
-	groups := flag.Int("groups", 2, "number of hex codes in a single group")
-	columns := flag.Int("columns", 16, "number of hex codes in a single line")
-	color := flag.Bool("color", true, "colored output")
+	groups := flag.Int("groups", DefaultGroups, "number of hex codes in a single group")
+	columns := flag.Int("columns", DefaultColumns, "number of hex codes in a single line")
+	color := flag.Bool("color", DefaultColor, "colored output")
 	outputName := flag.String("output", "", "output file")
 	flag.Parse()
+
+	maxLength := ((*columns / *groups)*(1+*groups*2) + *columns%*groups) - 1
+	formatter := PaddedFormat(maxLength, 9)
 
 	var output io.Writer = os.Stdout
 	if *outputName != "" {
@@ -196,7 +228,7 @@ func Main() int {
 		output = outputFile
 	}
 
-	dumper, err := NewCmdDumper(WithColor(*color), WithColumns(*columns), WithGroups(*groups), WithInputFromArgs(flag.Args()), WithOutput(output))
+	dumper, err := NewCmdDumper(WithColor(*color), WithColumns(*columns), WithGroups(*groups), WithInputFromArgs(flag.Args()), WithOutput(output), WithFormat(formatter))
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return ErrorFlag
