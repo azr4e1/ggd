@@ -7,15 +7,34 @@ import (
 	"strings"
 )
 
+const (
+	DefaultColumns = 16
+	DefaultGroups  = 2
+)
+
 var validHexDigits = []byte{'1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'}
 
+type hexDumper struct {
+	columns int
+	groups  int
+}
+
+type HexDump struct {
+	Input  []byte
+	Output []string
+	Offset int
+	Raw    []hexByte
+}
+
+type option func(d *hexDumper) error
+
 type hexByte struct {
-	First  byte
-	Second byte
+	first  byte
+	second byte
 }
 
 func (hx hexByte) String() string {
-	return strings.ToLower(fmt.Sprintf("%s%s", string(hx.First), string(hx.Second)))
+	return strings.ToLower(fmt.Sprintf("%s%s", string(hx.first), string(hx.second)))
 }
 
 func NewHex(first, second byte) (hexByte, error) {
@@ -45,16 +64,89 @@ func SingleByteDump(b byte) hexByte {
 	secondHex, _ := ConvertToHexadecimal(b & 0b00001111)
 
 	return hexByte{
-		First:  firstHex,
-		Second: secondHex,
+		first:  firstHex,
+		second: secondHex,
 	}
 }
 
-func HexDump(bs []byte) []hexByte {
-	dump := make([]hexByte, len(bs))
-	for _, el := range bs {
-		dump = append(dump, SingleByteDump(el))
+func NewDumper(opt ...option) (*hexDumper, error) {
+	d := &hexDumper{
+		columns: DefaultColumns,
+		groups:  DefaultGroups,
 	}
 
-	return dump
+	for _, o := range opt {
+		err := o(d)
+		if err != nil {
+			return &hexDumper{}, err
+		}
+	}
+
+	return d, nil
+}
+
+func DumperColumns(c int) option {
+	return func(d *hexDumper) error {
+		if c < 0 {
+			return errors.New("no columns")
+		}
+		d.columns = c
+
+		return nil
+	}
+}
+
+func DumperGroups(g int) option {
+	return func(d *hexDumper) error {
+		if g <= 0 {
+			return errors.New("no groups")
+		}
+		d.groups = g
+
+		return nil
+	}
+}
+
+// TODO: read as a stream of bytes, not slice of bytes
+func (hd hexDumper) Dump(bs []byte) []HexDump {
+	index := 0
+	length := len(bs)
+	dumps := []HexDump{}
+	groups := []string{}
+	currDump := HexDump{Offset: 0}
+	currBytes := []byte{}
+	currHexes := []hexByte{}
+	for index < length {
+		curr := ""
+		for g := 0; g < hd.groups; g++ {
+			b := bs[index]
+			currBytes = append(currBytes, b)
+
+			hex := SingleByteDump(b)
+			currHexes = append(currHexes, hex)
+
+			curr += hex.String()
+
+			index++
+			if index%hd.columns == 0 || index >= length {
+				break
+			}
+		}
+		groups = append(groups, curr)
+
+		if index%hd.columns == 0 || index >= length {
+			currDump.Input = currBytes
+			currDump.Raw = currHexes
+			currDump.Output = groups
+
+			dumps = append(dumps, currDump)
+
+			currDump = HexDump{Offset: index}
+			currBytes = []byte{}
+			currHexes = []hexByte{}
+			groups = []string{}
+		}
+
+	}
+	return dumps
 }
