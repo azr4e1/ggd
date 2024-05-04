@@ -25,17 +25,17 @@ const (
 	DefaultColumns    = 16
 	DefaultGroups     = 2
 	DefaultColor      = true
+	MaxLengthOffset   = 9
 )
 
 type option func(*cmdDumper) error
-type Formatter func(ggd.HexDump) string
 
 type cmdDumper struct {
 	Input     io.Reader
 	Output    io.Writer
 	Columns   int
 	Groups    int
-	Formatter Formatter
+	Formatter ggd.Formatter
 	files     []io.Reader
 }
 
@@ -51,19 +51,6 @@ func SpacePadding(str string, maxLength int) string {
 	return str + padding
 }
 
-func DefaultFormat(hx ggd.HexDump) string {
-	normalizedInput := []byte{}
-	for _, b := range hx.Input {
-		if !IsPrintableAscii(b) || b == '\n' || b == '\t' {
-			normalizedInput = append(normalizedInput, '.')
-			continue
-		}
-		normalizedInput = append(normalizedInput, b)
-	}
-
-	return fmt.Sprintf("%d:    %s    %s", hx.Offset, strings.Join(hx.Output, " "), normalizedInput)
-}
-
 func ZeroPadding(num int, maxLength int) string {
 	sNum := strconv.Itoa(num)
 	if len(sNum) >= maxLength {
@@ -73,7 +60,24 @@ func ZeroPadding(num int, maxLength int) string {
 	return padding + sNum
 }
 
-func PaddedFormat(maxLengthHex, maxLengthOffset int, color bool) Formatter {
+func GroupHexes(groupLength int, hexes []ggd.HexByte) []string {
+	groups := []string{}
+
+	currGroup := ""
+	for i, hb := range hexes {
+		if i != 0 && i%groupLength == 0 {
+			groups = append(groups, currGroup)
+			currGroup = ""
+		}
+		currGroup += hb.String()
+	}
+	if currGroup != "" {
+		groups = append(groups, currGroup)
+	}
+	return groups
+}
+
+func CmdFormat(groupLength, maxLengthHex, maxLengthOffset int, color bool) ggd.Formatter {
 	return func(hx ggd.HexDump) string {
 		normalizedInput := []byte{}
 		for _, b := range hx.Input {
@@ -84,8 +88,9 @@ func PaddedFormat(maxLengthHex, maxLengthOffset int, color bool) Formatter {
 			normalizedInput = append(normalizedInput, b)
 		}
 
-		hexCodes := SpacePadding(strings.Join(hx.Output, " "), maxLengthHex)
+		hexCodes := SpacePadding(strings.Join(GroupHexes(groupLength, hx.HexCodes), " "), maxLengthHex)
 		offset := ZeroPadding(hx.Offset, maxLengthOffset)
+
 		normalizedInputStr := string(normalizedInput)
 		if color {
 			hexCodes = hexCodesStyle.Render(hexCodes)
@@ -102,7 +107,7 @@ func NewCmdDumper(opts ...option) (*cmdDumper, error) {
 		Output:    os.Stdout,
 		Columns:   16,
 		Groups:    2,
-		Formatter: DefaultFormat,
+		Formatter: ggd.DefaultFormatter,
 	}
 
 	for _, o := range opts {
@@ -158,7 +163,7 @@ func WithGroups(g int) option {
 	}
 }
 
-func WithFormat(f Formatter) option {
+func WithFormat(f ggd.Formatter) option {
 	return func(cd *cmdDumper) error {
 		cd.Formatter = f
 		return nil
@@ -188,17 +193,14 @@ func (cd *cmdDumper) Dump() error {
 		defer f.(io.Closer).Close()
 	}
 
-	data, err := io.ReadAll(cd.Input)
+	dumper, err := ggd.NewDumper(ggd.DumperChunkSize(cd.Columns), ggd.DumperInput(cd.Input), ggd.DumperOutput(cd.Output), ggd.DumperFormatter(cd.Formatter))
 	if err != nil {
 		return err
 	}
-	dumper, err := ggd.NewDumper(ggd.DumperGroups(cd.Groups), ggd.DumperColumns(cd.Columns))
+	err = dumper.Dump()
 	if err != nil {
 		return err
 	}
-	dump := dumper.Dump(data)
-
-	fmt.Fprint(cd.Output, strings.Join(cd.Format(dump), "\n"))
 
 	return nil
 }
@@ -214,7 +216,6 @@ func Main() int {
 	if *columns%*groups != 0 {
 		maxLength++
 	}
-	formatter := PaddedFormat(maxLength, 9, *color)
 
 	var output io.Writer = os.Stdout
 	if *outputName != "" {
@@ -226,13 +227,16 @@ func Main() int {
 		defer outputFile.Close()
 
 		output = outputFile
+		*color = false
 	}
+	formatter := CmdFormat(*groups, maxLength, MaxLengthOffset, *color)
 
 	dumper, err := NewCmdDumper(WithColumns(*columns),
 		WithGroups(*groups),
 		WithInputFromArgs(flag.Args()),
 		WithOutput(output),
-		WithFormat(formatter))
+		WithFormat(formatter),
+	)
 
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
