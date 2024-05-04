@@ -77,7 +77,17 @@ func GroupHexes(groupLength int, hexes []ggd.HexByte) []string {
 	return groups
 }
 
-func CmdFormat(groupLength, maxLengthHex, maxLengthOffset int, color bool) ggd.Formatter {
+func CmdFormat(groupLength, maxLengthHex, maxLengthOffset int, color bool) (ggd.Formatter, error) {
+	if groupLength <= 0 {
+		return nil, errors.New("invalid number of groups")
+	}
+	if maxLengthHex <= 0 {
+		return nil, errors.New("invalid max length of hex sequence")
+	}
+	if maxLengthOffset <= 0 {
+		return nil, errors.New("invalid max length of offset")
+	}
+
 	return func(hx ggd.HexDump) string {
 		normalizedInput := []byte{}
 		for _, b := range hx.Input {
@@ -98,7 +108,7 @@ func CmdFormat(groupLength, maxLengthHex, maxLengthOffset int, color bool) ggd.F
 			normalizedInputStr = inputStyle.Render(normalizedInputStr)
 		}
 		return fmt.Sprintf("%s    | %s |    %s", offset, hexCodes, normalizedInputStr)
-	}
+	}, nil
 }
 
 func NewCmdDumper(opts ...option) (*cmdDumper, error) {
@@ -208,7 +218,7 @@ func (cd *cmdDumper) Dump() error {
 func Main() int {
 	flag.Usage = func() {
 		fmt.Printf("Usage: %s [-h|-help] [-groups GROUPS] [-columns COLUMNS] [-color COLOR] [-output OUTPUT] [files...]\n\n", os.Args[0])
-		fmt.Println("Turn input data from stdin or files into hexadecimal representation.\n")
+		fmt.Print("Turn input data from stdin or files into hexadecimal representation.\n\n")
 		fmt.Println("Flags:")
 		flag.PrintDefaults()
 	}
@@ -219,6 +229,10 @@ func Main() int {
 	outputName := flag.String("output", "", "output file")
 	flag.Parse()
 
+	if *groups <= 0 {
+		fmt.Fprintln(os.Stderr, "invalid number of groups")
+		return ErrorFlag
+	}
 	maxLength := *columns*2 + *columns / *groups - 1
 	if *columns%*groups != 0 {
 		maxLength++
@@ -236,7 +250,11 @@ func Main() int {
 		output = outputFile
 		*color = false
 	}
-	formatter := CmdFormat(*groups, maxLength, MaxLengthOffset, *color)
+	formatter, err := CmdFormat(*groups, maxLength, MaxLengthOffset, *color)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return ErrorFlag
+	}
 
 	dumper, err := NewCmdDumper(WithColumns(*columns),
 		WithGroups(*groups),
