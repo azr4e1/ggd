@@ -97,7 +97,7 @@ func CmdFormat(groupLength, maxLengthHex, maxLengthOffset int, color bool) ggd.F
 			offset = offsetStyle.Render(offset)
 			normalizedInputStr = inputStyle.Render(normalizedInputStr)
 		}
-		return fmt.Sprintf("%s:    | %s |    %s", offset, hexCodes, normalizedInputStr)
+		return fmt.Sprintf("%s    | %s |    %s", offset, hexCodes, normalizedInputStr)
 	}
 }
 
@@ -206,6 +206,13 @@ func (cd *cmdDumper) Dump() error {
 }
 
 func Main() int {
+	flag.Usage = func() {
+		fmt.Printf("Usage: %s [-h|-help] [-groups GROUPS] [-columns COLUMNS] [-color COLOR] [-output OUTPUT] [files...]\n\n", os.Args[0])
+		fmt.Println("Turn input data from stdin or files into hexadecimal representation.\n")
+		fmt.Println("Flags:")
+		flag.PrintDefaults()
+	}
+
 	groups := flag.Int("groups", DefaultGroups, "number of hex codes in a single group")
 	columns := flag.Int("columns", DefaultColumns, "number of hex codes in a single line")
 	color := flag.Bool("color", DefaultColor, "colored output")
