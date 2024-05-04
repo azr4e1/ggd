@@ -1,51 +1,56 @@
 package ggd
 
 import (
+	"bufio"
 	"errors"
 	"fmt"
+	"io"
+	"os"
 	"slices"
 	"strings"
 )
 
 const (
-	DefaultColumns = 16
+	DefaultBufSize = 16
 	DefaultGroups  = 2
 )
 
 var validHexDigits = []byte{'1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'}
 
+type Formatter func(HexDump) string
+type option func(d *hexDumper) error
+
 type hexDumper struct {
-	columns int
-	groups  int
+	chunkSize int
+	output    io.Writer
+	input     io.Reader
+	formatter Formatter
 }
 
 type HexDump struct {
-	Input  []byte
-	Output []string
-	Offset int
-	Raw    []hexByte
+	Input    []byte
+	Offset   int
+	HexCodes []HexByte
 }
 
-type option func(d *hexDumper) error
-
-type hexByte struct {
+type HexByte struct {
 	first  byte
 	second byte
 }
 
-func (hx hexByte) String() string {
+func (hx HexByte) String() string {
 	return strings.ToLower(fmt.Sprintf("%s%s", string(hx.first), string(hx.second)))
 }
 
-func NewHex(first, second byte) (hexByte, error) {
+func NewHex(first, second byte) (HexByte, error) {
 	if !slices.Contains(validHexDigits, first) {
-		return hexByte{}, fmt.Errorf("%v is not a valid hex digit", first)
+		return HexByte{}, fmt.Errorf("%v is not a valid hex digit", first)
 	}
 	if !slices.Contains(validHexDigits, second) {
-		return hexByte{}, fmt.Errorf("%v is not a valid hex digit", second)
+		return HexByte{}, fmt.Errorf("%v is not a valid hex digit", second)
 	}
 
-	return hexByte{first, second}, nil
+	return HexByte{first, second}, nil
 }
 
 func ConvertToHexadecimal(b byte) (byte, error) {
@@ -59,20 +64,30 @@ func ConvertToHexadecimal(b byte) (byte, error) {
 	return 0, errors.New("Not a valid hexadecimal value")
 }
 
-func SingleByteDump(b byte) hexByte {
+func SingleByteDump(b byte) HexByte {
 	firstHex, _ := ConvertToHexadecimal((b & 0b11110000) >> 4)
 	secondHex, _ := ConvertToHexadecimal(b & 0b00001111)
 
-	return hexByte{
+	return HexByte{
 		first:  firstHex,
 		second: secondHex,
 	}
 }
 
+func DefaultFormatter(hx HexDump) string {
+	hexCodes := ""
+	for _, hb := range hx.HexCodes {
+		hexCodes += hb.String()
+	}
+	return fmt.Sprintf("%s", hexCodes)
+}
+
 func NewDumper(opt ...option) (*hexDumper, error) {
 	d := &hexDumper{
-		columns: DefaultColumns,
-		groups:  DefaultGroups,
+		chunkSize: DefaultBufSize,
+		output:    os.Stdout,
+		input:     os.Stdin,
+		formatter: DefaultFormatter,
 	}
 
 	for _, o := range opt {
@@ -85,68 +100,87 @@ func NewDumper(opt ...option) (*hexDumper, error) {
 	return d, nil
 }
 
-func DumperColumns(c int) option {
+func DumperChunkSize(bs int) option {
 	return func(d *hexDumper) error {
-		if c < 0 {
+		if bs < 0 {
 			return errors.New("no columns")
 		}
-		d.columns = c
+		d.chunkSize = bs
 
 		return nil
 	}
 }
 
-func DumperGroups(g int) option {
+func DumperInput(input io.Reader) option {
 	return func(d *hexDumper) error {
-		if g <= 0 {
-			return errors.New("no groups")
+		if input == nil {
+			return errors.New("nil input")
 		}
-		d.groups = g
+		d.input = input
 
 		return nil
+	}
+}
+
+func DumperOutput(output io.Writer) option {
+	return func(d *hexDumper) error {
+		if output == nil {
+			return errors.New("nil output")
+		}
+		d.output = output
+
+		return nil
+	}
+}
+
+func DumperFormatter(f Formatter) option {
+	return func(d *hexDumper) error {
+
+		d.formatter = f
+
+		return nil
+	}
+}
+
+func newSplitFunc(hd hexDumper) bufio.SplitFunc {
+	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
+		chunkSize := hd.chunkSize
+
+		for i := 0; i < len(data); i++ {
+			if i == chunkSize-1 {
+				return chunkSize, data[:chunkSize], nil
+			}
+		}
+
+		if atEOF && len(data) > 0 {
+			return len(data), data, nil
+		}
+		// Request more data.
+		return 0, nil, nil
 	}
 }
 
 // TODO: read as a stream of bytes, not slice of bytes
-func (hd hexDumper) Dump(bs []byte) []HexDump {
-	index := 0
-	length := len(bs)
-	dumps := []HexDump{}
-	groups := []string{}
-	currDump := HexDump{Offset: 0}
-	currBytes := []byte{}
-	currHexes := []hexByte{}
-	for index < length {
-		curr := ""
-		for g := 0; g < hd.groups; g++ {
-			b := bs[index]
-			currBytes = append(currBytes, b)
+func (hd hexDumper) Dump() error {
+	scanner := bufio.NewScanner(hd.input)
 
-			hex := SingleByteDump(b)
-			currHexes = append(currHexes, hex)
+	scanner.Split(newSplitFunc(hd))
+	offset := 0
 
-			curr += hex.String()
-
-			index++
-			if index%hd.columns == 0 || index >= length {
-				break
-			}
+	for scanner.Scan() {
+		input := scanner.Bytes()
+		hex := HexDump{
+			Input:    input,
+			Offset:   offset,
+			HexCodes: []HexByte{},
 		}
-		groups = append(groups, curr)
-
-		if index%hd.columns == 0 || index >= length {
-			currDump.Input = currBytes
-			currDump.Raw = currHexes
-			currDump.Output = groups
-
-			dumps = append(dumps, currDump)
-
-			currDump = HexDump{Offset: index}
-			currBytes = []byte{}
-			currHexes = []hexByte{}
-			groups = []string{}
+		for _, b := range input {
+			hex.HexCodes = append(hex.HexCodes, SingleByteDump(b))
 		}
 
+		offset += len(input)
+		fmt.Fprintln(hd.output, hd.formatter(hex))
 	}
-	return dumps
+
+	return nil
 }
