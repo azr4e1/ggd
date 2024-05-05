@@ -29,6 +29,7 @@ const (
 	DefaultColor      = true
 	DefaultPlain      = false
 	DefaultDecode     = false
+	DefaultCapitalize = false
 	MaxLengthOffset   = 9
 )
 
@@ -82,7 +83,7 @@ func GroupHexes(groupLength int, hexes []ggd.HexByte) []string {
 	return groups
 }
 
-func NewEncodingFormat(groupLength, maxLengthHex, maxLengthOffset int, color bool) (ggd.EncodingFormatter, error) {
+func NewEncodingFormat(groupLength, maxLengthHex, maxLengthOffset int, color bool, capitalize bool) (ggd.EncodingFormatter, error) {
 	if groupLength <= 0 {
 		return nil, errors.New("invalid number of groups")
 	}
@@ -107,6 +108,9 @@ func NewEncodingFormat(groupLength, maxLengthHex, maxLengthOffset int, color boo
 		offset := ZeroPadding(hx.Offset, maxLengthOffset)
 
 		normalizedInputStr := string(normalizedInput)
+		if capitalize {
+			hexCodes = strings.ToUpper(hexCodes)
+		}
 		if color {
 			hexCodes = hexCodesStyle.Render(hexCodes)
 			offset = offsetStyle.Render(offset)
@@ -116,15 +120,21 @@ func NewEncodingFormat(groupLength, maxLengthHex, maxLengthOffset int, color boo
 	}, nil
 }
 
-func DecodingFormat(s string) ([]ggd.HexByte, error) {
-	splits := strings.Split(s, "|")
-	if len(splits) < 3 {
-		return nil, errors.New("wrong format used. Try with the '-plain' flag")
-	}
-	hexString := strings.Join(strings.Fields(splits[1]), "")
+func NewDecodingFormat(capitalize bool) ggd.DecodingFormatter {
 
-	decodedHex, err := ggd.DefaultDecFormatter(hexString)
-	return decodedHex, err
+	return func(s string) ([]ggd.HexByte, error) {
+		splits := strings.Split(s, "|")
+		if len(splits) < 3 {
+			return nil, errors.New("wrong format used. Try with the '-plain' flag")
+		}
+		hexString := strings.Join(strings.Fields(splits[1]), "")
+		if capitalize {
+			hexString = strings.ToLower(hexString)
+		}
+
+		decodedHex, err := ggd.DefaultDecFormatter(hexString)
+		return decodedHex, err
+	}
 }
 
 func NewCmdEncoder(opts ...option) (*cmdDumper, error) {
@@ -278,6 +288,7 @@ func Main() int {
 	columns := flag.Int("columns", DefaultColumns, "number of hex codes in a single line")
 	color := flag.Bool("color", DefaultColor, "colored output")
 	plain := flag.Bool("plain", DefaultPlain, "plain output")
+	capitalize := flag.Bool("capitalize", DefaultCapitalize, "capitalized hex codes")
 	outputName := flag.String("output", "", "output file")
 	flag.Parse()
 
@@ -303,17 +314,34 @@ func Main() int {
 		*color = false
 	}
 
-	encFormatter := ggd.DefaultEncFormatter
-	decFormatter := ggd.DefaultDecFormatter
+	encFormatter := func(capitalize bool) ggd.EncodingFormatter {
+		return func(hx ggd.HexEncoding) string {
+			str := ggd.DefaultEncFormatter(hx)
+			if capitalize {
+				str = strings.ToUpper(str)
+			}
+			return str
+		}
+	}(*capitalize)
+
+	decFormatter := func(capitalize bool) ggd.DecodingFormatter {
+		return func(s string) ([]ggd.HexByte, error) {
+			if capitalize {
+				s = strings.ToLower(s)
+			}
+			return ggd.DefaultDecFormatter(s)
+		}
+	}(*capitalize)
+
 	if !*plain {
 		var err error
-		encFormatter, err = NewEncodingFormat(*groups, maxLength, MaxLengthOffset, *color)
+		encFormatter, err = NewEncodingFormat(*groups, maxLength, MaxLengthOffset, *color, *capitalize)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return ErrorFlag
 		}
 
-		decFormatter = DecodingFormat
+		decFormatter = NewDecodingFormat(*capitalize)
 	}
 
 	dumper, err := NewCmdEncoder(
