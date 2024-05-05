@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"slices"
 )
 
 type EncodingFormatter func(HexEncoding) string
@@ -19,39 +18,7 @@ type hexEncoder struct {
 	formatter EncodingFormatter
 }
 
-func NewHex(first, second byte) (HexByte, error) {
-	if !slices.Contains(validHexDigits, first) {
-		return HexByte{}, fmt.Errorf("%v is not a valid hex digit", first)
-	}
-	if !slices.Contains(validHexDigits, second) {
-		return HexByte{}, fmt.Errorf("%v is not a valid hex digit", second)
-	}
-
-	return HexByte{first, second}, nil
-}
-
-func ConvertToHexadecimal(b byte) (byte, error) {
-	switch {
-	case b <= 9:
-		return '0' + b, nil
-	case b <= 15:
-		return 'a' + (b - 10), nil
-	}
-
-	return 0, errors.New("Not a valid hexadecimal value")
-}
-
-func SingleByteEncode(b byte) HexByte {
-	firstHex, _ := ConvertToHexadecimal((b & 0b11110000) >> 4)
-	secondHex, _ := ConvertToHexadecimal(b & 0b00001111)
-
-	return HexByte{
-		first:  firstHex,
-		second: secondHex,
-	}
-}
-
-func DefaultFormatter(hx HexEncoding) string {
+func DefaultEncFormatter(hx HexEncoding) string {
 	hexCodes := ""
 	for _, hb := range hx.HexCodes {
 		hexCodes += hb.String()
@@ -60,21 +27,21 @@ func DefaultFormatter(hx HexEncoding) string {
 }
 
 func NewEncoder(opt ...encoderOption) (*hexEncoder, error) {
-	d := &hexEncoder{
+	e := &hexEncoder{
 		chunkSize: DefaultBufSize,
 		output:    os.Stdout,
 		input:     os.Stdin,
-		formatter: DefaultFormatter,
+		formatter: DefaultEncFormatter,
 	}
 
 	for _, o := range opt {
-		err := o(d)
+		err := o(e)
 		if err != nil {
 			return &hexEncoder{}, err
 		}
 	}
 
-	return d, nil
+	return e, nil
 }
 
 func EncoderChunkSize(bs int) encoderOption {
@@ -137,11 +104,10 @@ func encoderSplitFunc(hd hexEncoder) bufio.SplitFunc {
 	}
 }
 
-// TODO: read as a stream of bytes, not slice of bytes
-func (hd hexEncoder) Encode() error {
-	scanner := bufio.NewScanner(hd.input)
+func (he hexEncoder) Encode() error {
+	scanner := bufio.NewScanner(he.input)
 
-	scanner.Split(encoderSplitFunc(hd))
+	scanner.Split(encoderSplitFunc(he))
 	offset := 0
 
 	for scanner.Scan() {
@@ -156,7 +122,7 @@ func (hd hexEncoder) Encode() error {
 		}
 
 		offset += len(input)
-		fmt.Fprintln(hd.output, hd.formatter(hex))
+		fmt.Fprintln(he.output, he.formatter(hex))
 	}
 
 	return nil
