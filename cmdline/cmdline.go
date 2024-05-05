@@ -16,7 +16,9 @@ import (
 )
 
 const (
-	ErrorFlag = 1
+	ErrorFlag = 1 + iota
+	ErrorEncode
+	ErrorDecode
 )
 
 const (
@@ -26,18 +28,20 @@ const (
 	DefaultGroups     = 2
 	DefaultColor      = true
 	DefaultPlain      = false
+	DefaultDecode     = false
 	MaxLengthOffset   = 9
 )
 
 type option func(*cmdDumper) error
 
 type cmdDumper struct {
-	Input     io.Reader
-	Output    io.Writer
-	Columns   int
-	Groups    int
-	Formatter ggd.EncodingFormatter
-	files     []io.Reader
+	Input             io.Reader
+	Output            io.Writer
+	Columns           int
+	Groups            int
+	EncodingFormatter ggd.EncodingFormatter
+	DecodingFormatter ggd.DecodingFormatter
+	files             []io.Reader
 }
 
 func IsPrintableAscii(b byte) bool {
@@ -78,7 +82,7 @@ func GroupHexes(groupLength int, hexes []ggd.HexByte) []string {
 	return groups
 }
 
-func CmdFormat(groupLength, maxLengthHex, maxLengthOffset int, color bool) (ggd.EncodingFormatter, error) {
+func NewEncodingFormat(groupLength, maxLengthHex, maxLengthOffset int, color bool) (ggd.EncodingFormatter, error) {
 	if groupLength <= 0 {
 		return nil, errors.New("invalid number of groups")
 	}
@@ -112,13 +116,25 @@ func CmdFormat(groupLength, maxLengthHex, maxLengthOffset int, color bool) (ggd.
 	}, nil
 }
 
-func NewCmdDumper(opts ...option) (*cmdDumper, error) {
+func DecodingFormat(s string) ([]ggd.HexByte, error) {
+	splits := strings.Split(s, "|")
+	if len(splits) < 3 {
+		return nil, errors.New("wrong format used. Try with the '-plain' flag")
+	}
+	hexString := strings.Join(strings.Fields(splits[1]), "")
+
+	decodedHex, err := ggd.DefaultDecFormatter(hexString)
+	return decodedHex, err
+}
+
+func NewCmdEncoder(opts ...option) (*cmdDumper, error) {
 	cmdD := &cmdDumper{
-		Input:     os.Stdin,
-		Output:    os.Stdout,
-		Columns:   16,
-		Groups:    2,
-		Formatter: ggd.DefaultFormatter,
+		Input:             os.Stdin,
+		Output:            os.Stdout,
+		Columns:           16,
+		Groups:            2,
+		EncodingFormatter: ggd.DefaultEncFormatter,
+		DecodingFormatter: ggd.DefaultDecFormatter,
 	}
 
 	for _, o := range opts {
@@ -134,7 +150,7 @@ func NewCmdDumper(opts ...option) (*cmdDumper, error) {
 func (cd cmdDumper) Format(hx []ggd.HexEncoding) []string {
 	formatted := []string{}
 	for _, h := range hx {
-		formatted = append(formatted, cd.Formatter(h))
+		formatted = append(formatted, cd.EncodingFormatter(h))
 	}
 
 	return formatted
@@ -174,9 +190,16 @@ func WithGroups(g int) option {
 	}
 }
 
-func WithFormat(f ggd.EncodingFormatter) option {
+func WithEncFormat(f ggd.EncodingFormatter) option {
 	return func(cd *cmdDumper) error {
-		cd.Formatter = f
+		cd.EncodingFormatter = f
+		return nil
+	}
+}
+
+func WithDecFormat(f ggd.DecodingFormatter) option {
+	return func(cd *cmdDumper) error {
+		cd.DecodingFormatter = f
 		return nil
 	}
 }
@@ -199,16 +222,42 @@ func WithInputFromArgs(args []string) option {
 	}
 }
 
-func (cd *cmdDumper) Dump() error {
+func (cd *cmdDumper) Encode() error {
 	for _, f := range cd.files {
 		defer f.(io.Closer).Close()
 	}
 
-	dumper, err := ggd.NewEncoder(ggd.EncoderChunkSize(cd.Columns), ggd.EncoderInput(cd.Input), ggd.EncoderOutput(cd.Output), ggd.EncoderFormatter(cd.Formatter))
+	dumper, err := ggd.NewEncoder(
+		ggd.EncoderChunkSize(cd.Columns),
+		ggd.EncoderInput(cd.Input),
+		ggd.EncoderOutput(cd.Output),
+		ggd.EncoderFormatter(cd.EncodingFormatter))
 	if err != nil {
 		return err
 	}
 	err = dumper.Encode()
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (cd *cmdDumper) Decode() error {
+	for _, f := range cd.files {
+		defer f.(io.Closer).Close()
+	}
+
+	dumper, err := ggd.NewDecoder(
+		ggd.DecoderInput(cd.Input),
+		ggd.DecoderOutput(cd.Output),
+		ggd.DecoderFormatter(cd.DecodingFormatter),
+	)
+	if err != nil {
+		return err
+	}
+
+	err = dumper.Decode()
 	if err != nil {
 		return err
 	}
@@ -224,6 +273,7 @@ func Main() int {
 		flag.PrintDefaults()
 	}
 
+	decode := flag.Bool("decode", DefaultDecode, "decode hex dump")
 	groups := flag.Int("groups", DefaultGroups, "number of hex codes in a single group")
 	columns := flag.Int("columns", DefaultColumns, "number of hex codes in a single line")
 	color := flag.Bool("color", DefaultColor, "colored output")
@@ -253,29 +303,45 @@ func Main() int {
 		*color = false
 	}
 
-	formatter := ggd.DefaultFormatter
+	encFormatter := ggd.DefaultEncFormatter
+	decFormatter := ggd.DefaultDecFormatter
 	if !*plain {
 		var err error
-		formatter, err = CmdFormat(*groups, maxLength, MaxLengthOffset, *color)
+		encFormatter, err = NewEncodingFormat(*groups, maxLength, MaxLengthOffset, *color)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return ErrorFlag
 		}
+
+		decFormatter = DecodingFormat
 	}
 
-	dumper, err := NewCmdDumper(WithColumns(*columns),
+	dumper, err := NewCmdEncoder(
+		WithColumns(*columns),
 		WithGroups(*groups),
 		WithInputFromArgs(flag.Args()),
 		WithOutput(output),
-		WithFormat(formatter),
+		WithEncFormat(encFormatter),
+		WithDecFormat(decFormatter),
 	)
-
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return ErrorFlag
 	}
 
-	dumper.Dump()
+	if !*decode {
+		err := dumper.Encode()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return ErrorEncode
+		}
+	} else {
+		err := dumper.Decode()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return ErrorDecode
+		}
+	}
 
 	return 0
 }
