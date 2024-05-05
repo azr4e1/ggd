@@ -7,39 +7,16 @@ import (
 	"io"
 	"os"
 	"slices"
-	"strings"
 )
 
-const (
-	DefaultBufSize = 16
-	DefaultGroups  = 2
-)
+type EncodingFormatter func(HexEncoding) string
+type encoderOption func(d *hexEncoder) error
 
-var validHexDigits = []byte{'1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'}
-
-type Formatter func(HexDump) string
-type option func(d *hexDumper) error
-
-type hexDumper struct {
+type hexEncoder struct {
 	chunkSize int
 	output    io.Writer
 	input     io.Reader
-	formatter Formatter
-}
-
-type HexDump struct {
-	Input    []byte
-	Offset   int
-	HexCodes []HexByte
-}
-
-type HexByte struct {
-	first  byte
-	second byte
-}
-
-func (hx HexByte) String() string {
-	return strings.ToLower(fmt.Sprintf("%s%s", string(hx.first), string(hx.second)))
+	formatter EncodingFormatter
 }
 
 func NewHex(first, second byte) (HexByte, error) {
@@ -64,7 +41,7 @@ func ConvertToHexadecimal(b byte) (byte, error) {
 	return 0, errors.New("Not a valid hexadecimal value")
 }
 
-func SingleByteDump(b byte) HexByte {
+func SingleByteEncode(b byte) HexByte {
 	firstHex, _ := ConvertToHexadecimal((b & 0b11110000) >> 4)
 	secondHex, _ := ConvertToHexadecimal(b & 0b00001111)
 
@@ -74,7 +51,7 @@ func SingleByteDump(b byte) HexByte {
 	}
 }
 
-func DefaultFormatter(hx HexDump) string {
+func DefaultFormatter(hx HexEncoding) string {
 	hexCodes := ""
 	for _, hb := range hx.HexCodes {
 		hexCodes += hb.String()
@@ -82,8 +59,8 @@ func DefaultFormatter(hx HexDump) string {
 	return fmt.Sprintf("%s", hexCodes)
 }
 
-func NewDumper(opt ...option) (*hexDumper, error) {
-	d := &hexDumper{
+func NewEncoder(opt ...encoderOption) (*hexEncoder, error) {
+	d := &hexEncoder{
 		chunkSize: DefaultBufSize,
 		output:    os.Stdout,
 		input:     os.Stdin,
@@ -93,15 +70,15 @@ func NewDumper(opt ...option) (*hexDumper, error) {
 	for _, o := range opt {
 		err := o(d)
 		if err != nil {
-			return &hexDumper{}, err
+			return &hexEncoder{}, err
 		}
 	}
 
 	return d, nil
 }
 
-func DumperChunkSize(bs int) option {
-	return func(d *hexDumper) error {
+func EncoderChunkSize(bs int) encoderOption {
+	return func(d *hexEncoder) error {
 		if bs < 0 {
 			return errors.New("no columns")
 		}
@@ -111,8 +88,8 @@ func DumperChunkSize(bs int) option {
 	}
 }
 
-func DumperInput(input io.Reader) option {
-	return func(d *hexDumper) error {
+func EncoderInput(input io.Reader) encoderOption {
+	return func(d *hexEncoder) error {
 		if input == nil {
 			return errors.New("nil input")
 		}
@@ -122,8 +99,8 @@ func DumperInput(input io.Reader) option {
 	}
 }
 
-func DumperOutput(output io.Writer) option {
-	return func(d *hexDumper) error {
+func EncoderOutput(output io.Writer) encoderOption {
+	return func(d *hexEncoder) error {
 		if output == nil {
 			return errors.New("nil output")
 		}
@@ -133,8 +110,8 @@ func DumperOutput(output io.Writer) option {
 	}
 }
 
-func DumperFormatter(f Formatter) option {
-	return func(d *hexDumper) error {
+func EncoderFormatter(f EncodingFormatter) encoderOption {
+	return func(d *hexEncoder) error {
 
 		d.formatter = f
 
@@ -142,7 +119,7 @@ func DumperFormatter(f Formatter) option {
 	}
 }
 
-func newSplitFunc(hd hexDumper) bufio.SplitFunc {
+func encoderSplitFunc(hd hexEncoder) bufio.SplitFunc {
 	return func(data []byte, atEOF bool) (advance int, token []byte, err error) {
 		chunkSize := hd.chunkSize
 
@@ -161,21 +138,21 @@ func newSplitFunc(hd hexDumper) bufio.SplitFunc {
 }
 
 // TODO: read as a stream of bytes, not slice of bytes
-func (hd hexDumper) Dump() error {
+func (hd hexEncoder) Encode() error {
 	scanner := bufio.NewScanner(hd.input)
 
-	scanner.Split(newSplitFunc(hd))
+	scanner.Split(encoderSplitFunc(hd))
 	offset := 0
 
 	for scanner.Scan() {
 		input := scanner.Bytes()
-		hex := HexDump{
+		hex := HexEncoding{
 			Input:    input,
 			Offset:   offset,
 			HexCodes: []HexByte{},
 		}
 		for _, b := range input {
-			hex.HexCodes = append(hex.HexCodes, SingleByteDump(b))
+			hex.HexCodes = append(hex.HexCodes, SingleByteEncode(b))
 		}
 
 		offset += len(input)
