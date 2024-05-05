@@ -277,7 +277,7 @@ func (cd *cmdDumper) Decode() error {
 
 func Main() int {
 	flag.Usage = func() {
-		fmt.Printf("Usage: %s [-h|-help] [-groups GROUPS] [-columns COLUMNS] [-color COLOR] [-output OUTPUT] [-plain PLAIN] [files...]\n\n", os.Args[0])
+		fmt.Printf("Usage: %s [-h|-help] [-groups GROUPS] [-columns COLUMNS] [-color COLOR] [-output OUTPUT] [-plain PLAIN] [-capitalize CAPITALIZE] [files...]\n\n", os.Args[0])
 		fmt.Print("Turn input data from stdin or files into hexadecimal representation.\n\n")
 		fmt.Println("Flags:")
 		flag.PrintDefaults()
