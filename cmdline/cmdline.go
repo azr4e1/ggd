@@ -26,7 +26,7 @@ const (
 	PrintableMaxASCII = unicode.MaxASCII
 	DefaultColumns    = 16
 	DefaultGroups     = 2
-	DefaultColor      = true
+	DefaultColor      = false
 	DefaultPlain      = false
 	DefaultDecode     = false
 	DefaultCapitalize = false
@@ -277,33 +277,51 @@ func (cd *cmdDumper) Decode() error {
 
 func Main() int {
 	flag.Usage = func() {
-		fmt.Printf("Usage: %s [-h|-help] [-groups GROUPS] [-columns COLUMNS] [-color COLOR] [-output OUTPUT] [-plain PLAIN] [-capitalize CAPITALIZE] [files...]\n\n", os.Args[0])
+		fmt.Printf("Usage: %s [options] [files...]\n\n", os.Args[0])
 		fmt.Print("Turn input data from stdin or files into hexadecimal representation.\n\n")
-		fmt.Println("Flags:")
-		flag.PrintDefaults()
+		fmt.Println("Options:")
+		fmt.Println("  -d --decode\n\tdecode hex dump")
+		fmt.Println("  -g --groups int\n\tnumber of hex codes in a single group")
+		fmt.Println("  -c --columns int\n\tnumber of hex codes in a single line")
+		fmt.Println("  -r --no-color\n\tcolored output")
+		fmt.Println("  -p --plain\n\tplain output")
+		fmt.Println("  -C --capitalize\n\tcapitalized hex codes")
+		fmt.Println("  -o --output string\n\toutput file")
+		fmt.Println("  -h --help\n\tshow this help and exit")
 	}
 
-	decode := flag.Bool("decode", DefaultDecode, "decode hex dump")
-	groups := flag.Int("groups", DefaultGroups, "number of hex codes in a single group")
-	columns := flag.Int("columns", DefaultColumns, "number of hex codes in a single line")
-	color := flag.Bool("color", DefaultColor, "colored output")
-	plain := flag.Bool("plain", DefaultPlain, "plain output")
-	capitalize := flag.Bool("capitalize", DefaultCapitalize, "capitalized hex codes")
-	outputName := flag.String("output", "", "output file")
+	var decode, noColor, capitalize, plain bool
+	var groups, columns int
+	var outputName string
+
+	flag.BoolVar(&decode, "decode", DefaultDecode, "decode hex dump")
+	flag.BoolVar(&decode, "d", DefaultDecode, "decode hex dump")
+	flag.IntVar(&groups, "groups", DefaultGroups, "number of hex codes in a single group")
+	flag.IntVar(&groups, "g", DefaultGroups, "number of hex codes in a single group")
+	flag.IntVar(&columns, "columns", DefaultColumns, "number of hex codes in a single line")
+	flag.IntVar(&columns, "c", DefaultColumns, "number of hex codes in a single line")
+	flag.BoolVar(&noColor, "no-color", DefaultColor, "colored output")
+	flag.BoolVar(&noColor, "r", DefaultColor, "colored output")
+	flag.BoolVar(&plain, "plain", DefaultPlain, "plain output")
+	flag.BoolVar(&plain, "p", DefaultPlain, "plain output")
+	flag.BoolVar(&capitalize, "capitalize", DefaultCapitalize, "capitalized hex codes")
+	flag.BoolVar(&capitalize, "C", DefaultCapitalize, "capitalized hex codes")
+	flag.StringVar(&outputName, "output", "", "output file")
+	flag.StringVar(&outputName, "o", "", "output file")
 	flag.Parse()
 
-	if *groups <= 0 {
+	if groups <= 0 {
 		fmt.Fprintln(os.Stderr, "invalid number of groups")
 		return ErrorFlag
 	}
-	maxLength := *columns*2 + *columns / *groups - 1
-	if *columns%*groups != 0 {
+	maxLength := columns*2 + columns/groups - 1
+	if columns%groups != 0 {
 		maxLength++
 	}
 
 	var output io.Writer = os.Stdout
-	if *outputName != "" {
-		outputFile, err := os.Create(*outputName)
+	if outputName != "" {
+		outputFile, err := os.Create(outputName)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return ErrorFlag
@@ -311,7 +329,7 @@ func Main() int {
 		defer outputFile.Close()
 
 		output = outputFile
-		*color = false
+		noColor = true
 	}
 
 	encFormatter := func(capitalize bool) ggd.EncodingFormatter {
@@ -322,7 +340,7 @@ func Main() int {
 			}
 			return str
 		}
-	}(*capitalize)
+	}(capitalize)
 
 	decFormatter := func(capitalize bool) ggd.DecodingFormatter {
 		return func(s string) ([]ggd.HexByte, error) {
@@ -331,22 +349,22 @@ func Main() int {
 			}
 			return ggd.DefaultDecFormatter(s)
 		}
-	}(*capitalize)
+	}(capitalize)
 
-	if !*plain {
+	if !plain {
 		var err error
-		encFormatter, err = NewEncodingFormat(*groups, maxLength, MaxLengthOffset, *color, *capitalize)
+		encFormatter, err = NewEncodingFormat(groups, maxLength, MaxLengthOffset, !noColor, capitalize)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return ErrorFlag
 		}
 
-		decFormatter = NewDecodingFormat(*capitalize)
+		decFormatter = NewDecodingFormat(capitalize)
 	}
 
 	dumper, err := NewCmdEncoder(
-		WithColumns(*columns),
-		WithGroups(*groups),
+		WithColumns(columns),
+		WithGroups(groups),
 		WithInputFromArgs(flag.Args()),
 		WithOutput(output),
 		WithEncFormat(encFormatter),
@@ -357,7 +375,7 @@ func Main() int {
 		return ErrorFlag
 	}
 
-	if !*decode {
+	if !decode {
 		err := dumper.Encode()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
