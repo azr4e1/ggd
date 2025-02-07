@@ -92,8 +92,7 @@ func (hd hexDecoder) Decode() error {
 		input := scanner.Text()
 		hexBytes, err := hd.formatter(input)
 		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			continue
+			return err
 		}
 
 		decodedHex := []byte{}
